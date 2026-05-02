@@ -6,6 +6,7 @@ from libcity.data.dataset.traffic_state_grid_dataset import \
     TrafficStateGridDataset
 from libcity.data.dataset.pdformer_dataset import PDFormerDataset
 from libcity.data.dataset.pdformer_grid_dataset import PDFormerGridDataset
+from libcity.data.dataset.physics_prior_dataset import PhysicsPriorDataset
 
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     "TrafficStateGridDataset",
     "PDFormerDataset",
     "PDFormerGridDataset",
+    "PhysicsPriorDataset",
 ]
