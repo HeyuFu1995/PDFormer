@@ -165,6 +165,8 @@ class STSelfAttention(nn.Module):
         self.t_v_conv = nn.Conv2d(dim, int(dim * self.t_ratio), kernel_size=1, bias=qkv_bias)
         self.t_attn_drop = nn.Dropout(attn_drop)
 
+        self.bias_proj = nn.Linear(1, geo_num_heads)
+
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
@@ -196,7 +198,8 @@ class STSelfAttention(nn.Module):
         geo_v = geo_v.reshape(B, T, N, self.geo_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
         geo_attn = (geo_q @ geo_k.transpose(-2, -1)) * self.scale
         if bias_matrix is not None:
-            geo_attn += bias_matrix.unsqueeze(2)
+            learned_bias = self.bias_proj(bias_matrix.unsqueeze(-1)).permute(0, 1, 4, 2, 3)
+            geo_attn += learned_bias
         if geo_mask is not None:
             geo_attn.masked_fill_(geo_mask, float('-inf'))
         geo_attn = geo_attn.softmax(dim=-1)
