@@ -78,7 +78,6 @@ class DataEmbedding(nn.Module):
         self.embed_dim = embed_dim
         self.feature_dim = feature_dim
         self.value_embedding = TokenEmbedding(feature_dim, embed_dim)
-        self.ext_embedding = TokenEmbedding(feature_dim, embed_dim)
 
         self.position_encoding = PositionalEncoding(embed_dim)
         if self.add_time_in_day:
@@ -95,11 +94,10 @@ class DataEmbedding(nn.Module):
         x = self.value_embedding(origin_x[:, :, :, :self.feature_dim])
         x += self.position_encoding(x)
         if self.add_time_in_day:
-            x += self.daytime_embedding((origin_x[:, :, :, self.feature_dim + 1] * self.minute_size).round().long())
+            x += self.daytime_embedding((origin_x[:, :, :, self.feature_dim] * self.minute_size).round().long())
         if self.add_day_in_week:
-            x += self.weekday_embedding(origin_x[:, :, :, self.feature_dim + 2: self.feature_dim + 9].argmax(dim=3))
+            x += self.weekday_embedding(origin_x[:, :, :, self.feature_dim + 1: self.feature_dim + 8].argmax(dim=3))
         x += self.spatial_embedding(lap_mx)
-        x += self.ext_embedding(origin_x[:, :, :, self.feature_dim:self.feature_dim + 1])
         x = self.dropout(x)
         return x
 
@@ -170,7 +168,7 @@ class STSelfAttention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x, x_patterns, pattern_keys, geo_mask=None, sem_mask=None):
+    def forward(self, x, x_patterns, pattern_keys, geo_mask=None, sem_mask=None, bias_matrix=None):
         B, T, N, D = x.shape
         t_q = self.t_q_conv(x.permute(0, 3, 1, 2)).permute(0, 3, 2, 1)
         t_k = self.t_k_conv(x.permute(0, 3, 1, 2)).permute(0, 3, 2, 1)
@@ -197,6 +195,8 @@ class STSelfAttention(nn.Module):
         geo_k = geo_k.reshape(B, T, N, self.geo_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
         geo_v = geo_v.reshape(B, T, N, self.geo_num_heads, self.head_dim).permute(0, 1, 3, 2, 4)
         geo_attn = (geo_q @ geo_k.transpose(-2, -1)) * self.scale
+        if bias_matrix is not None:
+            geo_attn += bias_matrix.unsqueeze(2)
         if geo_mask is not None:
             geo_attn.masked_fill_(geo_mask, float('-inf'))
         geo_attn = geo_attn.softmax(dim=-1)
@@ -300,12 +300,12 @@ class STEncoderBlock(nn.Module):
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
 
-    def forward(self, x, x_patterns, pattern_keys, geo_mask=None, sem_mask=None):
+    def forward(self, x, x_patterns, pattern_keys, geo_mask=None, sem_mask=None, bias_matrix=None):
         if self.type_ln == 'pre':
-            x = x + self.drop_path(self.st_attn(self.norm1(x), x_patterns, pattern_keys, geo_mask=geo_mask, sem_mask=sem_mask))
+            x = x + self.drop_path(self.st_attn(self.norm1(x), x_patterns, pattern_keys, geo_mask=geo_mask, sem_mask=sem_mask, bias_matrix=bias_matrix))
             x = x + self.drop_path(self.mlp(self.norm2(x)))
         elif self.type_ln == 'post':
-            x = self.norm1(x + self.drop_path(self.st_attn(x, x_patterns, pattern_keys, geo_mask=geo_mask, sem_mask=sem_mask)))
+            x = self.norm1(x + self.drop_path(self.st_attn(x, x_patterns, pattern_keys, geo_mask=geo_mask, sem_mask=sem_mask, bias_matrix=bias_matrix)))
             x = self.norm2(x + self.drop_path(self.mlp(x)))
         return x
 
@@ -334,6 +334,7 @@ class PDFormer(AbstractTrafficStateModel):
         t_num_heads = config.get('t_num_heads', 2)
         mlp_ratio = config.get("mlp_ratio", 4)
         qkv_bias = config.get("qkv_bias", True)
+        self.phy_bias = config.get('phy_bias', False)
         drop = config.get("drop", 0.)
         attn_drop = config.get("attn_drop", 0.)
         drop_path = config.get("drop_path", 0.3)
@@ -417,6 +418,12 @@ class PDFormer(AbstractTrafficStateModel):
 
     def forward(self, batch, lap_mx=None):
         x = batch['X']
+        if self.phy_bias:
+            physics_bias = x[:, :, :, -1]
+            bias_matrix = torch.add(physics_bias.unsqueeze(-1), physics_bias.unsqueeze(-2)) #（T，N，N)
+            x = x[:, :, :, :-1]
+        else:
+            bias_matrix = None
         T =  x.shape[1]
         x_pattern_list = []
         for i in range(self.s_attn_size):
@@ -439,7 +446,7 @@ class PDFormer(AbstractTrafficStateModel):
         enc = self.enc_embed_layer(x, lap_mx)
         skip = 0
         for i, encoder_block in enumerate(self.encoder_blocks):
-            enc = encoder_block(enc, x_patterns, pattern_keys, self.geo_mask, self.sem_mask)
+            enc = encoder_block(enc, x_patterns, pattern_keys, self.geo_mask, self.sem_mask, bias_matrix=bias_matrix)
             skip += self.skip_convs[i](enc.permute(0, 3, 2, 1))
 
         skip = self.end_conv1(F.relu(skip.permute(0, 3, 2, 1)))
