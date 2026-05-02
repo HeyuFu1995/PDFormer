@@ -19,3 +19,4 @@ gensim
 nltk==3.2.4
 statsmodels==0.13.1
 tslearn==0.5.2
+pwlf==2.5.2
