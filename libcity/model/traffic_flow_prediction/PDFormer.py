@@ -78,7 +78,7 @@ class DataEmbedding(nn.Module):
         self.embed_dim = embed_dim
         self.feature_dim = feature_dim
         self.value_embedding = TokenEmbedding(feature_dim, embed_dim)
-        self.ext_embedding = TokenEmbedding(feature_dim, embed_dim)
+        self.ext_embedding = nn.Embedding(100, embed_dim)
 
         self.position_encoding = PositionalEncoding(embed_dim)
         if self.add_time_in_day:
@@ -95,11 +95,11 @@ class DataEmbedding(nn.Module):
         x = self.value_embedding(origin_x[:, :, :, :self.feature_dim])
         x += self.position_encoding(x)
         if self.add_time_in_day:
-            x += self.daytime_embedding((origin_x[:, :, :, self.feature_dim + 1] * self.minute_size).round().long())
+            x += self.daytime_embedding((origin_x[:, :, :, self.feature_dim] * self.minute_size).round().long())
         if self.add_day_in_week:
-            x += self.weekday_embedding(origin_x[:, :, :, self.feature_dim + 2: self.feature_dim + 9].argmax(dim=3))
+            x += self.weekday_embedding(origin_x[:, :, :, self.feature_dim + 1: self.feature_dim + 8].argmax(dim=3))
         x += self.spatial_embedding(lap_mx)
-        x += self.ext_embedding(origin_x[:, :, :, self.feature_dim:self.feature_dim + 1])
+        x += self.ext_embedding((origin_x[:, :, :, -1] * 100).round().long())
         x = self.dropout(x)
         return x
 
